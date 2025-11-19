@@ -4,7 +4,8 @@ This script automatically creates a light managed by
 [HomeAssistant](https://www.home-assistant.io/integrations/light.mqtt/) using
 [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) and [aiomqtt](https://github.com/empicano/aiomqtt/).
 Once this script, systemd unit and udev rules are installed, plugging in
-a [BlinkStickStrip](https://www.blinkstick.com/products/blinkstick-strip) will create a new MQTT light in every HomeAssistant
+a [BlinkStickStrip](https://www.blinkstick.com/products/blinkstick-strip) (for example)
+will create a new MQTT light in every HomeAssistant
 instance connected to the same MQTT server.
 This MQTT light entity in HomeAssistant can immediately be used to switch the light on and off.
 
@@ -19,5 +20,4 @@ Replace the `{{ .. }}` strings with your values and install them without the `.j
 TODO: 
 1. open the USB light with a given USB path (`1-2:1.0` for example) without enumerating all HID devices. How?
 2. handle colour changes
-3. handle any time of USB/HID light not just BlinkStickStrip
 3. use brighness to control the number of on leds?

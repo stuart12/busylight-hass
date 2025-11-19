@@ -189,24 +189,41 @@ async def flash_light(light: busylight_core.Light, colour: tuple[int, int, int])
     for led in [1, 3, 5, 7]:
         light.on(color=colour, led=led)
         await asyncio.sleep(0.05)
+    logging.debug("flashed %s colour=%s", light, colour)
 
 
 def get_light(path: str) -> busylight_core.Light:
+    as_bytes = str.encode(path)
     # TODO: how can I open a USB light with the given path without having to enumerate all HID devices?
+    hardware = busylight_core.Light.available_hardware()
+    logging.debug("busylight_core.available_hardware %d %s", len(hardware), hardware)
+    for subclass, devices in hardware.items():
+        for device in devices:
+            if device.path == as_bytes:
+                if not device.serial_number:
+                    logging.warn("no serial number in %s manufacturer_string=%s", device, device.manufacturer_string)
+                light = subclass(device)
+                logging.info("opened light %s serial=%s release_number=%s", light, light.hardware.serial_number, light.hardware.release_number)
+                return light
+
+    logging.fatal("path %s not found in list of %d hardware", as_bytes, len(hardware))
+    sys.exit(1)
+    return None
+
     # TODO: use the correct Light subclass rather than assuming a BlinkStickStrip
 
     devices = busylight_core.hid.enumerate()
-    logging.debug("hid.enumerated %s", devices)
+    logging.debug("hid.enumerated %d %s", len(devices), devices)
 
-    as_bytes = str.encode(path)
     for device in devices:
         if device['path'] == as_bytes:
-            logging.debug("from_hid %s %s", device, dir(device))
+            logging.debug("from_hid device=%s at %s", device, device['path'])
             hardware = busylight_core.Hardware.from_hid(device=device)
-            logging.debug("hardware %s %s", hardware, dir(hardware))
+            logging.debug("hardware %s manufacturer_string=%s serial_number=%s", hardware, hardware.manufacturer_string, hardware.serial_number)
+            if not hardware.serial_number:
+                logging.warn("no serial number in %s manufacturer_string=%s", hardware, hardware.manufacturer_string)
             light = busylight_core.BlinkStickStrip(hardware=hardware)
-            logging.info("light %s %s", light, light.hardware.serial_number)
-            logging.debug("light state %s %s %s", light, light.state, dir(light))
+            logging.info("opened light %s serial=%s release_number=%s", light, light.hardware.serial_number, light.hardware.release_number)
             return light
         else:
             logging.debug("loop %s != %s", as_bytes, device['path'])
