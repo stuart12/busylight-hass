@@ -1,0 +1,85 @@
+# {{ global.files.tag }}
+[Unit]
+After=network-online.target
+Wants=network-online.target
+Description = Busylight on USB light with MQTT autodiscovery for HomeAssistant
+BindsTo = dev-alias-busylight_hass-%I.device
+DefaultDependencies = false
+StopWhenUnneeded = true
+Documentation=https://github.com/stuart12/busylight-hass
+
+[Service]
+WorkingDirectory = /tmp
+RuntimeDirectory = %N
+RuntimeDirectoryMode=0744
+CacheDirectory = %N
+CacheDirectoryMode=0744
+UMask = 077
+
+ExecStartPre = +sh -cxe '\
+  eval $(udevadm info --path=/sys/bus/usb/devices/%i/.. --query=property --property=BUSNUM,DEVNUM); \
+  dev=/dev/bus/usb/$BUSNUM/$DEVNUM; \
+  chgrp --reference=${RUNTIME_DIRECTORY} $dev; \
+  chmod 660 $dev; \
+  ls -l $dev \
+  '
+
+ExecStartPre = +cp --no-preserve=all {{ password_file }} ${RUNTIME_DIRECTORY}/passwd
+ExecStartPre = +chmod 440 ${RUNTIME_DIRECTORY}/passwd
+ExecStartPre = +chgrp --reference=${RUNTIME_DIRECTORY} ${RUNTIME_DIRECTORY}/passwd
+ExecStartPre = logger -p notice unit busylight-hass starting n=%n i=%i I=%I f=%f
+ExecStartPre = +cp --no-preserve=all {{ location }}/busylight-hass.py ${RUNTIME_DIRECTORY}/script
+ExecStartPre = +chmod 444 ${RUNTIME_DIRECTORY}/script
+
+ExecStart = sh -ce ' \
+  python3 -m venv ve; \
+  . ve/bin/activate; \
+  set -x; \
+  python3 -m pip --disable-pip-version-check --cache-dir=${CACHE_DIRECTORY}/pip install aiomqtt busylight_core; \
+  exec python3 ${RUNTIME_DIRECTORY}/script \
+    --loglevel={{ loglevel }} \
+    --mqttuser={{ user }} \
+    --mqttbroker={{ broker }} \
+    --mqttpasswdfile=${RUNTIME_DIRECTORY}/passwd \
+    {{ arguments | join(' ') }} \
+    %i'
+
+DynamicUser = true
+
+ProtectHome = true
+CapabilityBoundingSet = 
+NoNewPrivileges = true
+PrivateTmp = true
+PrivateUsers = true
+
+{# breaks at device open, perhaps once enumeration has been removed?
+PrivateDevices = true
+DeviceAllow = char-usb rwm
+DeviceAllow = char-usb_device rwm # see /proc/devices
+#}
+
+ProtectClock = true
+ProtectControlGroups = true
+ProtectKernelModules = true
+ProtectKernelTunables = true
+ProtectSystem = strict
+RestrictAddressFamilies = AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces = true
+RestrictRealtime = true
+MemoryDenyWriteExecute = true
+SystemCallArchitectures = native
+SystemCallErrorNumber = EPERM
+SystemCallFilter = @system-service # remove for strace
+SystemCallFilter = ~@resources
+SystemCallFilter = ~@privileged
+IPAddressAllow = any
+IPAccounting = true
+ProtectKernelLogs = true
+ProtectHostname = true
+LockPersonality = true
+ProtectProc = invisible
+ProcSubset = pid
+{#
+https://linux-audit.com/systemd/settings/units/
+#}
+[Install]
