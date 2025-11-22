@@ -18,7 +18,8 @@ UMask = 077
 
 ExecStartPre = +sh -cxe '\
   eval $(udevadm info --path=/sys/bus/usb/devices/%i/.. --query=property --property=BUSNUM,DEVNUM); \
-  dev=/dev/bus/usb/$BUSNUM/$DEVNUM; \
+  dev=/dev/bus/usb/$${BUSNUM:?}/$${DEVNUM:?}; \
+  test -c $dev; \
   chgrp --reference=${RUNTIME_DIRECTORY} $dev; \
   chmod 660 $dev; \
   ls -l $dev \
