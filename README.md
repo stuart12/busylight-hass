@@ -66,4 +66,4 @@ and might be what caused failures when `PrivateDevices = true`
 was set in [busylight_hass@.service.j2](./busylight_hass@.service.j2) for extra
 security.
 It would be good, as discussed in [issue 3](https://github.com/JnyJny/busylight/issues/3#issuecomment-3563923604)
-if `busylight_core.Light.available_hardware()` could take an argument to only open the light at a given USB path.
+if `busylight_core.Light.available_hardware()` could take an argument to only return the light at a given USB path.
