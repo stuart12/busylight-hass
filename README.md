@@ -18,6 +18,9 @@ reflected in the HomeAssistant UI and used in automations.
 
 This script is a work in progress so breaking changes may arrive.
 
+I created this project because HomeAssistant's [BlinkStick integration](https://www.home-assistant.io/integrations/blinksticklight/)
+was disabled by https://github.com/home-assistant/core/pull/121846/.
+
 ## Installation
 
 The systemd unit and udev rules files are ninja templates.
