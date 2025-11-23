@@ -193,22 +193,13 @@ async def flash_light(light: busylight_core.Light, colour: tuple[int, int, int])
 
 
 def get_light(path: str) -> busylight_core.Light:
-    as_bytes = str.encode(path)
-    # TODO: how can I open a USB light with the given path without having to enumerate all HID devices?
-    hardware = busylight_core.Light.available_hardware()
-    logging.debug("busylight_core.available_hardware %d %s", len(hardware), hardware)
-    for subclass, devices in hardware.items():
-        for device in devices:
-            if device.path == as_bytes:
-                if not device.serial_number:
-                    logging.warn("no serial number in %s manufacturer_string=%s", device, device.manufacturer_string)
-                light = subclass(device)
-                logging.info("opened light %s serial=%s release_number=%s", light, light.hardware.serial_number, light.hardware.release_number)
-                return light
-
-    logging.fatal("path %s not found in list of %d hardware", as_bytes, len(hardware))
-    sys.exit(1)
-    return None
+    try:
+        light = busylight_core.Light.at_path(path)
+    except busylight_core.NoLightsFoundError as ex:
+        logging.fatal("No light found at path %s: %s", path, ex)
+        sys.exit(2)
+    logging.info("using light %s with %d LEDs", light, light.nleds)
+    return light
     
 
 async def main():
