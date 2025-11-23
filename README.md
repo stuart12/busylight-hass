@@ -32,8 +32,7 @@ and install the files without the `.j2` suffix.
 Reload systemd, plug in your light, check that it is available in HomeAssistant.
 
 ## TODO
-2. handle colour changes
-3. use brighness to control the number of on leds?
+1. decide how to control individual leds
 
 ## Architecture
 
