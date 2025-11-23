@@ -32,7 +32,6 @@ and install the files without the `.j2` suffix.
 Reload systemd, plug in your light, check that it is available in HomeAssistant.
 
 ## TODO
-1. open the USB light with a given USB path (`1-2:1.0` for example) without enumerating all HID devices. How?
 2. handle colour changes
 3. use brighness to control the number of on leds?
 
@@ -42,8 +41,6 @@ USB lights can be inserted and removed at any moment.
 When a light is inserted HomeAssistant needs to be informed via
 [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery).
 Similarly when an USB light is removed the HomeAssistant UI must be updated to show the light as unavailable.
-During a quick look, I could not find any callbacks in busylight-core that could be used
-to emit mqtt messages when USB lights are inserted and removed.
 
 It is possible to leverage udev and systemd to start a systemd unit when
 an USB device is inserted and have that unit stopped when the USB device is removed.
@@ -52,18 +49,3 @@ See the included [busylight.rules.j2](./busylight.rules.j2) and
 I thus decided to have each busylight-hass server only manage one USB light
 and that a computer will run multiple busylight-hass servers if it has
 multiple lights at a given moment.
-This also has the desirable property that if no lights are present no resources are used.
-
-The systemd unit passes the path of the USB light that it is managing
-to the busylight-hass script.
-busylight-hass will manage the light at that path and no other.
-busylight-core does not have a mechanism to open a light at a given path
-so busylight-hass has to enumerate all lights and look in the list of lights
-for the light at the correct path.
-This is inelegant,
-might cause problems at boot when multiple devices are added at the same time,
-and might be what caused failures when `PrivateDevices = true`
-was set in [busylight_hass@.service.j2](./busylight_hass@.service.j2) for extra
-security.
-It would be good, as discussed in [issue 3](https://github.com/JnyJny/busylight/issues/3#issuecomment-3563923604)
-if `busylight_core.Light.available_hardware()` could take an argument to only return the light at a given USB path.
