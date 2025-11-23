@@ -29,7 +29,7 @@ import logging
 import re
 import syslog
 import functools
-import errno
+import collections
 import asyncio
 import socket
 import aiomqtt
@@ -71,33 +71,52 @@ def get_password(password: str, password_file: str) -> str:
         return f.readline().strip('\n')
 
 
-def queue_current_state(light: busylight_core.Light, outgoing: asyncio.Queue) -> None:
-    outgoing.put_nowait("ON" if light.is_lit else "OFF")
+Outgoing = collections.namedtuple('Outgoing', ['topic', 'payload'])
+
+
+def queue_current_state(light: busylight_core.Light, outgoing: asyncio.Queue, discovery: dict) -> None:
+    outgoing.put_nowait(Outgoing(topic=discovery['state_topic'], payload=discovery['payload_on'] if light.is_lit else discovery['payload_off']))
+    outgoing.put_nowait(Outgoing(discovery['rgb_state_topic'], ",".join([str(c) for c in light.color])))
 
 
 async def listener(client: aiomqtt.Client, light: busylight_core.Light, discovery: dict, outgoing: asyncio.Queue, colour: tuple[int, int, int]) -> None:
     async for message in client.messages:
-        logging.debug("got a message from client.messages: %s %s to set %s", message.topic, message.payload, colour)
+        logging.debug("got a message from client.messages: %s %s", message.topic, message.payload)
         topic = str(message.topic)
         payload = message.payload.decode().lower()
         if topic == discovery['command_topic']:
-            if payload == "on":
-                light.on(colour)
-            elif payload == "off":
+            if payload == discovery['payload_off']:
                 light.off()
+                logging.debug("off payload from client: %s %s", message.topic, message.payload)
+            elif payload == discovery['payload_on']:
+                light.on(colour)
+                logging.debug("on payload from client: %s %s %s", message.topic, message.payload, colour)
             else:
                 logging.info("unexpected message from clients: %s %s", message.topic, payload)
-            queue_current_state(light, outgoing)
+        elif topic == discovery['rgb_command_topic']:
+            try:
+                components = [int(component) for component in payload.split(',')]
+                if len(components) != 3:
+                    logging.warning("incorrect colour count on topic: %s %s", message.topic, message.payload)
+                else:
+                    colour = tuple(components)
+                    logging.debug("rgb payload from client: %s %s %s", message.topic, message.payload, colour)
+                    light.on(colour)
+            except ValueError as ex:
+                logging.warning("bad colour on topic: %s %s", message.topic, message.payload)
         else:
             logging.info("message on unexpected topic from client: %s %s", message.topic, message.payload)
+
+        queue_current_state(light=light, outgoing=outgoing, discovery=discovery)
+
     logging.error("end of listener")
 
 
-async def publisher(client: aiomqtt.Client, topic:str, outgoing: asyncio.Queue) -> None:
+async def publisher(client: aiomqtt.Client, outgoing: asyncio.Queue) -> None:
     while True:
-        status = await outgoing.get()
-        logging.debug("retrieved a status %s to send in %s, %d remaining", status, topic, outgoing.qsize())
-        await client.publish(topic=topic, payload=status, retain=True)
+        message = await outgoing.get()
+        logging.debug("retrieved a message %s to send %d remaining", message, outgoing.qsize())
+        await client.publish(topic=message.topic, payload=message.payload, retain=True)
         outgoing.task_done()
     logging.error("end of publisher")
 
@@ -129,7 +148,11 @@ def make_discovery(hardware: busylight_core.Hardware) -> dict:
         "object_id": identifier,
         "availability_topic": make_topic(hardware, 'availability'),
         "command_topic": make_topic(hardware, 'command'),
+        "payload_on": "on",
+        "payload_off": "off",
         "state_topic": make_topic(hardware, 'state'),
+        "rgb_command_topic": make_topic(hardware, 'rgb_command'),
+        "rgb_state_topic": make_topic(hardware, 'rgb_state'),
         "qos": 2,
     }
     return payload
@@ -161,6 +184,7 @@ async def mqtt(light: busylight_core.Light,
         try: # https://aiomqtt.bo3hm.com/subscribing-to-a-topic.html
             async with client:
                 await client.subscribe(discovery['command_topic'])
+                await client.subscribe(discovery['rgb_command_topic'])
                 await send_mqtt_configuration(client, light.hardware, discovery)
                 if first:
                     first = False
@@ -168,10 +192,10 @@ async def mqtt(light: busylight_core.Light,
                         light.on(color=colour)
                     else:
                         light.off()
-                    queue_current_state(light, outgoing)
+                    queue_current_state(light=light, outgoing=outgoing, discovery=discovery)
                 async with asyncio.TaskGroup() as tg:
                     tg.create_task(listener(client=client, light=light, discovery=discovery, outgoing=outgoing, colour=colour))
-                    tg.create_task(publisher(client, discovery['state_topic'], outgoing))
+                    tg.create_task(publisher(client=client, outgoing=outgoing))
             logging.error("after async")
         except aiomqtt.MqttError:
             logging.warning("Connection lost to %s; Reconnecting in %f seconds ...", broker, reconnect_delay)
