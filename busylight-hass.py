@@ -76,7 +76,7 @@ Outgoing = collections.namedtuple('Outgoing', ['topic', 'payload'])
 
 
 def get_int(current: int, fields: list[int], position: int) -> int:
-    if len(fields) < position:
+    if len(fields) <= position:
         return current
     try:
         return int(fields[position])
