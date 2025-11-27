@@ -1,7 +1,5 @@
 # {{ global.files.tag }}
 [Unit]
-After=network-online.target
-Wants=network-online.target
 Description = Busylight on USB light with MQTT autodiscovery for HomeAssistant
 BindsTo = dev-alias-busylight_hass-%I.device
 DefaultDependencies = false
@@ -16,13 +14,13 @@ CacheDirectory = %N
 CacheDirectoryMode=0744
 UMask = 077
 
-ExecStartPre = +sh -cxe '\
+ExecStartPre = +sh -ce '\
   eval $(udevadm info --path=/sys/bus/usb/devices/%i/.. --query=property --property=BUSNUM,DEVNUM); \
   dev=/dev/bus/usb/$${BUSNUM:?}/$${DEVNUM:?}; \
   test -c $dev; \
   chgrp --reference=${RUNTIME_DIRECTORY} $dev; \
   chmod 660 $dev; \
-  ls -l $dev \
+  exec ls -l $dev \
   '
 
 ExecStartPre = +cp --no-preserve=all {{ password_file }} ${RUNTIME_DIRECTORY}/passwd
@@ -32,11 +30,20 @@ ExecStartPre = logger -p notice unit busylight-hass starting n=%n i=%i I=%I f=%f
 ExecStartPre = +cp --no-preserve=all {{ location }}/busylight-hass.py ${RUNTIME_DIRECTORY}/script
 ExecStartPre = +chmod 444 ${RUNTIME_DIRECTORY}/script
 
+Environment = "PACKAGES= \
+  aiomqtt==2.4.0 \
+  busylight_core==0.15.3 \
+  "
+Environment = "PIP=python3 -m pip --disable-pip-version-check"
+
 ExecStart = sh -ce ' \
   python3 -m venv ve; \
   . ve/bin/activate; \
   set -x; \
-  python3 -m pip --disable-pip-version-check --cache-dir=${CACHE_DIRECTORY}/pip install aiomqtt busylight_core; \
+  [ -d ${CACHE_DIRECTORY}/pkg ] || { \
+    ${PIP} --no-cache-dir download --dest=${CACHE_DIRECTORY}/pkg-tmp ${PACKAGES}; \
+    mv ${CACHE_DIRECTORY}/pkg-tmp ${CACHE_DIRECTORY}/pkg; }; \
+  ${PIP} install --no-index --find-links=${CACHE_DIRECTORY}/pkg ${PACKAGES}; \
   exec python3 ${RUNTIME_DIRECTORY}/script \
     --loglevel={{ loglevel }} \
     --mqttuser={{ user }} \
