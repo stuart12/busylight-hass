@@ -47,7 +47,7 @@ def get_options():
     parser.add_argument('--on', dest='initially_on', action="store_true", help="start with light on (default)")
     parser.add_argument("-v", "--verbose", dest='loglevel', action="store_const", const='debug', help="debug loglevel")
     parser.add_argument("-l", "--loglevel", metavar="LEVEL", help="set logging level")
-    parser.add_argument("--reconnect", type=float, metavar="SECONDS", default=60, help="delay reconnection attempts")
+    parser.add_argument("--reconnect", type=float, metavar="SECONDS", default=10, help="delay reconnection attempts")
     parser.add_argument("--red", type=int, metavar="INTEGER", default=255, help="red level")
     parser.add_argument("--green", type=int, metavar="INTEGER", default=0, help="green level")
     parser.add_argument("--blue", type=int, metavar="INTEGER", default=0, help="blue level")
@@ -226,7 +226,7 @@ def make_discovery(hardware: busylight_core.Hardware) -> dict:
     return payload
 
 
-async def send_mqtt_configuration(client: aiomqtt.Client, hardware: busylight_core.Hardware, payload: dict) -> None:
+async def send_mqtt_configuration(client: aiomqtt.Client, payload: dict) -> None:
     # https://stevessmarthomeguide.com/adding-an-mqtt-device-to-home-assistant/
     # https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
     discovery_topic = f"homeassistant/light/busylight_hass/{payload['unique_id']}/config"
@@ -249,11 +249,12 @@ async def mqtt(light: busylight_core.Light,
     outgoing = asyncio.Queue()
     first = True
     while True:
-        try: # https://aiomqtt.bo3hm.com/subscribing-to-a-topic.html
+        try:
+            logging.debug("starting main loop with %d tasks", len(asyncio.all_tasks()))
             async with client:
                 await client.subscribe(discovery['command_topic'])
-                await send_mqtt_configuration(client, light.hardware, discovery)
                 if first:
+                    await send_mqtt_configuration(client, discovery)
                     first = False
                     rgb = colour.get_rgb() if on else (0, 0, 0)
                     light.on(color=rgb)
@@ -264,7 +265,7 @@ async def mqtt(light: busylight_core.Light,
                     tg.create_task(publisher(client=client, outgoing=outgoing))
             logging.error("after async")
         except aiomqtt.MqttError:
-            logging.warning("Connection lost to %s; Reconnecting in %f seconds ...", broker, reconnect_delay)
+            logging.warning("Connection lost to %s; Reconnecting in %0.2f seconds ...", broker, reconnect_delay)
             await asyncio.sleep(reconnect_delay)
 
 
