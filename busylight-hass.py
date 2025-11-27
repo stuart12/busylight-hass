@@ -152,22 +152,10 @@ async def listener(client: aiomqtt.Client, light: busylight_core.Light, discover
                 on = True
                 colour.update(fields, 1)
                 rgb = colour.get_rgb()
-                logging.debug("setting colours to %s", rgb)
                 await transition(light, fields, offset=5, rgb=rgb)
                 logging.debug("after setting colours to %s colours are %s", rgb, light.color)
             else:
                 logging.info("bad message from client: %s %s", message.topic, payload)
-        elif topic == discovery['rgb_command_topic']:
-            try:
-                components = [int(component) for component in payload.split(',')]
-                if len(components) != 3:
-                    logging.warning("incorrect colour count on topic: %s %s", message.topic, message.payload)
-                else:
-                    colour = tuple(components)
-                    logging.debug("rgb payload from client: %s %s %s", message.topic, message.payload, colour)
-                    light.on(colour)
-            except ValueError as ex:
-                logging.warning("bad colour on topic: %s %s", message.topic, message.payload)
         else:
             logging.info("message on unexpected topic from client: %s %s", message.topic, message.payload)
 
