@@ -138,10 +138,15 @@ async def transition(light: busylight_core.Light, fields: list[str], offset: int
             else:
                 finish = time.time() + transition
                 count = 0
+                rgb = (0, 0, 0)
                 while time.time() < finish:
                     light.off()
                     await asyncio.sleep(off_delay)
                     count += 1
+                    color = light.color
+                    if color != rgb:
+                        logging.debug("light.color changed to %s from %s after %d calls to off", color, rgb, count)
+                        rbg = color
                 logging.debug("sent off %d times in %0.4f seconds (%0.2f per second)", count, transition, count / transition)
 
     logging.debug("set %s leds=%d %s %d", rgb, light.nleds, fields, offset)
