@@ -53,7 +53,7 @@ def get_options():
     parser.add_argument("--blue", type=int, metavar="INTEGER", default=0, help="blue level")
     parser.add_argument("--brightness", type=int, metavar="INTEGER", default=255, help="initial and default brightness")
     parser.add_argument("--mqttbroker", help="mqtt broker")
-    parser.add_argument("--id", default="busylight-hass", help="tag for mqtt broker and topics")
+    parser.add_argument('--mqtt_tag', '--tag', default='busylight_hass', help='tag for mqtt broker and topics')
     parser.add_argument("--mqttuser", help="mqtt user")
     parser.add_argument("--mqttpassword", help="mqtt password")
     parser.add_argument("--mqttpasswordfile","--mqttpasswdfile", metavar="FILENAME", help="file containing mqtt password")
@@ -173,14 +173,14 @@ async def publisher(client: aiomqtt.Client, outgoing: asyncio.Queue) -> None:
     logging.error("end of publisher")
 
 
-def make_topic(hardware: busylight_core.Hardware, topic: str) -> str:
+def make_topic(hardware: busylight_core.Hardware, topic: str, mqtt_tag: str) -> str:
     serial = re.sub(r'[ /+#]', '-', hardware.serial_number)
-    return "/".join(["busylight_hass", "%#0x" % hardware.vendor_id, "%#0x" % hardware.product_id, serial, topic])
+    return "/".join([mqtt_tag, "%#0x" % hardware.vendor_id, "%#0x" % hardware.product_id, serial, topic])
 
 
-def make_discovery(hardware: busylight_core.Hardware) -> dict:
+def make_discovery(hardware: busylight_core.Hardware, mqtt_tag: str) -> dict:
     identifier = "%0xdx%0xdx%s" % (hardware.vendor_id, hardware.product_id, re.sub(r'[^a-z0-9]', 'y', hardware.serial_number.lower()))
-    discovery_topic = f"homeassistant/light/busylight_hass/{identifier}/config"
+    discovery_topic = f"homeassistant/light/{mqtt_tag}/{identifier}/config"
 
     payload = {
         "device": {
@@ -199,9 +199,9 @@ def make_discovery(hardware: busylight_core.Hardware) -> dict:
         "unique_id": identifier,
         "object_id": identifier,
         "schema": "template",
-        "availability_topic": make_topic(hardware, 'availability'),
-        "state_topic": make_topic(hardware, 'state'),
-        "command_topic": make_topic(hardware, 'command'),
+        "availability_topic": make_topic(hardware, 'availability', mqtt_tag=mqtt_tag),
+        "state_topic": make_topic(hardware, 'state', mqtt_tag=mqtt_tag),
+        "command_topic": make_topic(hardware, 'command', mqtt_tag=mqtt_tag),
         "command_on_template": "on,{{ red | d }},{{ green | d }},{{ blue  | d }},{{ brightness | d }},{{ transition | d }}",
         "command_off_template": "off,{{ transition | d }}",
         "state_template": "{{ value.split(',')[0] }}",  # must return `on` or `off`
@@ -214,10 +214,10 @@ def make_discovery(hardware: busylight_core.Hardware) -> dict:
     return payload
 
 
-async def send_mqtt_configuration(client: aiomqtt.Client, payload: dict) -> None:
+async def send_mqtt_configuration(client: aiomqtt.Client, payload: dict, mqtt_tag: str) -> None:
     # https://stevessmarthomeguide.com/adding-an-mqtt-device-to-home-assistant/
     # https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
-    discovery_topic = f"homeassistant/light/busylight_hass/{payload['unique_id']}/config"
+    discovery_topic = f"homeassistant/light/{mqtt_tag}/{payload['unique_id']}/config"
     availability_topic = payload['availability_topic']
     logging.info("publishing homeassistance discovery on %s for %s", discovery_topic, availability_topic)
     await client.publish(discovery_topic, json.dumps(payload), retain=True)
@@ -229,9 +229,10 @@ async def mqtt(light: busylight_core.Light,
         reconnect_delay: float,
         colour: Colour,
         on: bool,
+        mqtt_tag: str,
     ) -> None:
     logging.info("aiomqtt.Client(hostname=%s, username=%s, password=password, identifier=%s)", broker, user, clientid)
-    discovery = make_discovery(light.hardware)
+    discovery = make_discovery(light.hardware, mqtt_tag)
     will = aiomqtt.Will(topic=discovery['availability_topic'], payload="offline", qos=2, retain=True) # https://github.com/empicano/aiomqtt/issues/28
     client = aiomqtt.Client(hostname=broker, username=user, password=password, identifier=clientid, will=will)
     outgoing = asyncio.Queue()
@@ -242,7 +243,7 @@ async def mqtt(light: busylight_core.Light,
             async with client:
                 await client.subscribe(discovery['command_topic'])
                 if first:
-                    await send_mqtt_configuration(client, discovery)
+                    await send_mqtt_configuration(client, discovery, mqtt_tag=mqtt_tag)
                     first = False
                     rgb = colour.get_rgb() if on else (0, 0, 0)
                     light.on(color=rgb)
@@ -308,6 +309,7 @@ async def main():
                 reconnect_delay=options.reconnect,
                 colour=colour,
                 on=options.initially_on,
+                mqtt_tag=options.mqtt_tag,
             ))
 
 
