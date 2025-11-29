@@ -52,6 +52,7 @@ def get_options():
     parser.add_argument("--green", type=int, metavar="INTEGER", default=0, help="green level")
     parser.add_argument("--blue", type=int, metavar="INTEGER", default=0, help="blue level")
     parser.add_argument("--brightness", type=int, metavar="INTEGER", default=255, help="initial and default brightness")
+    parser.add_argument('--off_delay', type=float, metavar='seconds', default=0.0, help='repeat off requests at this delay')
     parser.add_argument("--mqttbroker", help="mqtt broker")
     parser.add_argument('--mqtt_tag', '--tag', default='busylight_hass', help='tag for mqtt broker and topics')
     parser.add_argument("--mqttuser", help="mqtt user")
@@ -116,28 +117,41 @@ def queue_current_state(on: bool, colour: Colour, outgoing: asyncio.Queue, disco
     outgoing.put_nowait(Outgoing(topic=discovery['state_topic'], payload=payload))
 
 
-async def transition(light: busylight_core.Light, fields: list[str], offset: int, rgb: tuple[int, int, int]) -> None:
+async def transition(light: busylight_core.Light, fields: list[str], offset: int, rgb: tuple[int, int, int], off_delay: float) -> None:
     if light.nleds > 0 and len(fields) > offset and fields[offset]:
         try:
             transition = float(fields[offset])
         except ValueError:
             logging.info("bad transition from client: %s", fields)
         else:
-            delay = transition / (light.nleds - 1.0)
-            logging.debug("transition to %s leds=%d %s %f %f %d", rgb, light.nleds, fields, transition, delay, offset)
-            first = True
-            for led in range(1, light.nleds + 1):
-                if not first:
-                    await asyncio.sleep(delay)
-                else:
-                    first = False
-                light.on(color=rgb, led=led)
-            return
+            if max(rgb) or off_delay <= 0:
+                delay = transition / (light.nleds - 1.0)
+                logging.debug("transition to %s leds=%d %s %f %f %d", rgb, light.nleds, fields, transition, delay, offset)
+                first = True
+                for led in range(1, light.nleds + 1):
+                    if not first:
+                        await asyncio.sleep(delay)
+                    else:
+                        first = False
+                    light.on(color=rgb, led=led)
+                return
+            else:
+                finish = time.time() + transition
+                count = 0
+                while time.time() < finish:
+                    light.off()
+                    await asyncio.sleep(off_delay)
+                    count += 1
+                logging.debug("sent off %d times in %0.4f seconds (%0.2f per second)", count, transition, count / transition)
+
     logging.debug("set %s leds=%d %s %d", rgb, light.nleds, fields, offset)
     light.on(color=rgb)
 
 
-async def listener(client: aiomqtt.Client, light: busylight_core.Light, discovery: dict, outgoing: asyncio.Queue, colour: Colour, on: bool) -> None:
+async def listener(client: aiomqtt.Client, light: busylight_core.Light, discovery: dict, outgoing: asyncio.Queue, colour: Colour,
+        on: bool,
+        off_delay: float,
+    ) -> None:
     async for message in client.messages:
         logging.debug("got a message from client.messages: %s %s", message.topic, message.payload)
         topic = str(message.topic)
@@ -145,14 +159,14 @@ async def listener(client: aiomqtt.Client, light: busylight_core.Light, discover
         if topic == discovery['command_topic']:
             fields = payload.split(",")
             if fields[0] == "off":
-                await transition(light, fields, offset=1, rgb=(0, 0, 0))
+                await transition(light, fields, offset=1, rgb=(0, 0, 0), off_delay=off_delay)
                 on = False
                 logging.debug("after off colours are %s", light.color)
             elif fields[0] == "on":
                 on = True
                 colour.update(fields, 1)
                 rgb = colour.get_rgb()
-                await transition(light, fields, offset=5, rgb=rgb)
+                await transition(light, fields, offset=5, rgb=rgb, off_delay=off_delay)
                 logging.debug("after setting colours to %s colours are %s", rgb, light.color)
             else:
                 logging.info("bad message from client: %s %s", message.topic, payload)
@@ -230,6 +244,7 @@ async def mqtt(light: busylight_core.Light,
         colour: Colour,
         on: bool,
         mqtt_tag: str,
+        off_delay: float,
     ) -> None:
     logging.info("aiomqtt.Client(hostname=%s, username=%s, password=password, identifier=%s)", broker, user, clientid)
     discovery = make_discovery(light.hardware, mqtt_tag)
@@ -250,7 +265,7 @@ async def mqtt(light: busylight_core.Light,
                     logging.debug("initial colours %s read back as %s", rgb, light.color)
                     queue_current_state(on=on, colour=colour, outgoing=outgoing, discovery=discovery)
                 async with asyncio.TaskGroup() as tg:
-                    tg.create_task(listener(client=client, light=light, discovery=discovery, outgoing=outgoing, colour=colour, on=on))
+                    tg.create_task(listener(client=client, light=light, discovery=discovery, outgoing=outgoing, colour=colour, on=on, off_delay=off_delay))
                     tg.create_task(publisher(client=client, outgoing=outgoing))
             logging.error("after async")
         except aiomqtt.MqttError:
@@ -310,6 +325,7 @@ async def main():
                 colour=colour,
                 on=options.initially_on,
                 mqtt_tag=options.mqtt_tag,
+                off_delay=options.off_delay,
             ))
 
 
