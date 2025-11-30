@@ -52,7 +52,8 @@ def get_options():
     parser.add_argument("--green", type=int, metavar="INTEGER", default=0, help="green level")
     parser.add_argument("--blue", type=int, metavar="INTEGER", default=0, help="blue level")
     parser.add_argument("--brightness", type=int, metavar="INTEGER", default=255, help="initial and default brightness")
-    parser.add_argument('--off_delay', type=float, metavar='seconds', default=0.0, help='repeat off requests at this delay')
+    parser.add_argument('--repeat_delay', type=float, metavar='DELAY', default=0.2, help='delay between requests when repeating')
+    parser.add_argument('--repeat_duration', type=float, metavar='DURATION', default=0.0, help='repeat requests for this duration')
     parser.add_argument("--mqttbroker", help="mqtt broker")
     parser.add_argument('--mqtt_tag', '--tag', default='busylight_hass', help='tag for mqtt broker and topics')
     parser.add_argument("--mqttuser", help="mqtt user")
@@ -74,6 +75,7 @@ def get_password(password: str, password_file: str) -> str:
 
 
 Outgoing = collections.namedtuple('Outgoing', ['topic', 'payload'])
+LongSet = collections.namedtuple('LongSet', ['duration', 'delay'])
 
 
 def get_int(current: int, fields: list[int], position: int) -> int:
@@ -117,62 +119,74 @@ def queue_current_state(on: bool, colour: Colour, outgoing: asyncio.Queue, disco
     outgoing.put_nowait(Outgoing(topic=discovery['state_topic'], payload=payload))
 
 
-async def transition(light: busylight_core.Light, fields: list[str], offset: int, rgb: tuple[int, int, int], off_delay: float) -> None:
-    if light.nleds > 0 and len(fields) > offset and fields[offset]:
+async def repeat_set(light: busylight_core.Light, repeated_set: LongSet, rgb: tuple[int, int, int]) -> None:
+    if repeated_set.duration > 0 and repeated_set.delay > 0:
+        finish = time.time() + repeated_set.duration
+        count = 0
+        expected = rgb
+        logging.debug("starting repeat_set to %s duration %f delay %f finish %f",  rgb, repeated_set.duration, repeated_set.delay, finish)
+        while time.time() < finish:
+            await asyncio.sleep(repeated_set.delay)
+            light.on(rgb)
+            count += 1
+            logging.debug("executing repeat_set to %s count=%d duration=%f delay=%f", rgb, count, repeated_set.duration, repeated_set.delay)
+            color = light.color
+            if color != expected:
+                logging.debug("light.color changed to %s from %s after %d calls to light.on", expected, color, count)
+                expected = color
+        logging.debug("finished repeat_set to %s count %d duration %f delay %f finish %f", rgb,count, repeated_set.duration, repeated_set.delay, finish)
+
+
+def get_transition(fields: list[str], offset: int) -> float:
+    if len(fields) > offset and fields[offset]:
         try:
-            transition = float(fields[offset])
+            return float(fields[offset])
         except ValueError:
             logging.info("bad transition from client: %s", fields)
-        else:
-            if max(rgb) or off_delay <= 0:
-                delay = transition / (light.nleds - 1.0)
-                logging.debug("transition to %s leds=%d %s %f %f %d", rgb, light.nleds, fields, transition, delay, offset)
-                first = True
-                for led in range(1, light.nleds + 1):
-                    if not first:
-                        await asyncio.sleep(delay)
-                    else:
-                        first = False
-                    light.on(color=rgb, led=led)
-                return
-            else:
-                finish = time.time() + transition
-                count = 0
-                rgb = (0, 0, 0)
-                while time.time() < finish:
-                    light.off()
-                    await asyncio.sleep(off_delay)
-                    count += 1
-                    color = light.color
-                    if color != rgb:
-                        logging.debug("light.color changed to %s from %s after %d calls to off", color, rgb, count)
-                        rbg = color
-                logging.debug("sent off %d times in %0.4f seconds (%0.2f per second)", count, transition, count / transition)
+    return 0
 
-    logging.debug("set %s leds=%d %s %d", rgb, light.nleds, fields, offset)
-    light.on(color=rgb)
+
+async def do_transition(light: busylight_core.Light, transition_duration: float, rgb: tuple[int, int, int], repeated_set: LongSet) -> None:
+    if light.nleds <= 1 or transition_duration <= 0:
+        logging.debug("no transition to %s leds=%d transition_duration=%f", rgb, light.nleds, transition_duration)
+        light.on(color=rgb)
+    else:
+        delay = transition_duration / (light.nleds - 1.0)
+        logging.debug("transition to %s leds=%d transition_duration=%f delay=%f", rgb, light.nleds, transition_duration, delay)
+        first = True
+        for led in range(1, light.nleds + 1):
+            if not first:
+                await asyncio.sleep(delay)
+            else:
+                first = False
+            light.on(color=rgb, led=led)
+
+    await repeat_set(light, repeated_set, rgb)
+    logging.debug("transition to %s done leds=%d repeat=%s", rgb, light.nleds, repeated_set)
 
 
 async def listener(client: aiomqtt.Client, light: busylight_core.Light, discovery: dict, outgoing: asyncio.Queue, colour: Colour,
         on: bool,
-        off_delay: float,
+        repeated_set: LongSet,
+        tg: asyncio.TaskGroup,
     ) -> None:
+    task = None
     async for message in client.messages:
         logging.debug("got a message from client.messages: %s %s", message.topic, message.payload)
-        topic = str(message.topic)
-        payload = message.payload.decode().lower()
-        if topic == discovery['command_topic']:
-            fields = payload.split(",")
+        if str(message.topic) == discovery['command_topic']:
+            if task:
+                task.cancel()
+                task = None
+            fields = message.payload.decode().split(",")
             if fields[0] == "off":
-                await transition(light, fields, offset=1, rgb=(0, 0, 0), off_delay=off_delay)
+                transition = get_transition(fields, 1)
+                task = tg.create_task(do_transition(light, transition_duration=transition, rgb=(0, 0, 0), repeated_set=repeated_set))
                 on = False
-                logging.debug("after off colours are %s", light.color)
             elif fields[0] == "on":
                 on = True
                 colour.update(fields, 1)
-                rgb = colour.get_rgb()
-                await transition(light, fields, offset=5, rgb=rgb, off_delay=off_delay)
-                logging.debug("after setting colours to %s colours are %s", rgb, light.color)
+                transition = get_transition(fields, 5)
+                task = tg.create_task(do_transition(light, transition_duration=transition, rgb=colour.get_rgb(), repeated_set=repeated_set))
             else:
                 logging.info("bad message from client: %s %s", message.topic, payload)
         else:
@@ -197,7 +211,8 @@ def make_topic(hardware: busylight_core.Hardware, topic: str, mqtt_tag: str) -> 
     return "/".join([mqtt_tag, "%#0x" % hardware.vendor_id, "%#0x" % hardware.product_id, serial, topic])
 
 
-def make_discovery(hardware: busylight_core.Hardware, mqtt_tag: str) -> dict:
+def make_discovery(light: busylight_core.Light, mqtt_tag: str) -> dict:
+    hardware = light.hardware
     identifier = "%0xdx%0xdx%s" % (hardware.vendor_id, hardware.product_id, re.sub(r'[^a-z0-9]', 'y', hardware.serial_number.lower()))
     discovery_topic = f"homeassistant/light/{mqtt_tag}/{identifier}/config"
 
@@ -228,6 +243,7 @@ def make_discovery(hardware: busylight_core.Hardware, mqtt_tag: str) -> dict:
         "red_template": "{{ value.split(',')[1] }}",
         "green_template": "{{ value.split(',')[2] }}",
         "blue_template": "{{ value.split(',')[3] }}",
+        "transition": "true" if light.nleds > 1 else "false",
         "qos": 2,
     }
     return payload
@@ -249,10 +265,10 @@ async def mqtt(light: busylight_core.Light,
         colour: Colour,
         on: bool,
         mqtt_tag: str,
-        off_delay: float,
+        repeated_set: LongSet,
     ) -> None:
     logging.info("aiomqtt.Client(hostname=%s, username=%s, password=password, identifier=%s)", broker, user, clientid)
-    discovery = make_discovery(light.hardware, mqtt_tag)
+    discovery = make_discovery(light, mqtt_tag)
     will = aiomqtt.Will(topic=discovery['availability_topic'], payload="offline", qos=2, retain=True) # https://github.com/empicano/aiomqtt/issues/28
     client = aiomqtt.Client(hostname=broker, username=user, password=password, identifier=clientid, will=will)
     outgoing = asyncio.Queue()
@@ -270,7 +286,7 @@ async def mqtt(light: busylight_core.Light,
                     logging.debug("initial colours %s read back as %s", rgb, light.color)
                     queue_current_state(on=on, colour=colour, outgoing=outgoing, discovery=discovery)
                 async with asyncio.TaskGroup() as tg:
-                    tg.create_task(listener(client=client, light=light, discovery=discovery, outgoing=outgoing, colour=colour, on=on, off_delay=off_delay))
+                    tg.create_task(listener(client=client, light=light, discovery=discovery, outgoing=outgoing, colour=colour, on=on, repeated_set=repeated_set, tg=tg))
                     tg.create_task(publisher(client=client, outgoing=outgoing))
             logging.error("after async")
         except aiomqtt.MqttError:
@@ -337,7 +353,7 @@ async def main():
                 colour=colour,
                 on=options.initially_on,
                 mqtt_tag=options.mqtt_tag,
-                off_delay=options.off_delay,
+                repeated_set=LongSet(duration=options.repeat_duration, delay=options.repeat_delay),
             ))
 
 
