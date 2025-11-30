@@ -64,7 +64,7 @@ def get_options():
     return options
 
 
-def get_password(password: str, password_file: str) -> str:
+def get_password(password: str, password_file: str) -> str | None:
     if password:
         return password
     if not password_file:
@@ -78,7 +78,7 @@ Outgoing = collections.namedtuple('Outgoing', ['topic', 'payload'])
 LongSet = collections.namedtuple('LongSet', ['duration', 'delay'])
 
 
-def get_int(current: int, fields: list[int], position: int) -> int:
+def get_int(current: int, fields: list[str], position: int) -> int:
     if len(fields) <= position:
         return current
     try:
@@ -96,13 +96,12 @@ class Colour:
 
     def get_rgb(self) -> tuple[int, int, int]:
         if  self.brightness >= 255:
-            r = [self.red, self.green, self.blue]
+            return (self.red, self.green, self.blue)
         elif self.brightness <= 0:
-            r = [0, 0, 0]
+            return (0, 0, 0)
         else:
             scale = self.brightness / 255.0
-            r = [int(self.red * scale), int(self.green * scale), int(self.blue * scale)]
-        return tuple(r)
+            return (int(self.red * scale), int(self.green * scale), int(self.blue * scale))
 
     def update(self, fields: list[str], offset: int) -> None:
         self.red = get_int(self.red, fields, offset)
@@ -114,7 +113,7 @@ class Colour:
         return f"{self.red},{self.green},{self.blue},{self.brightness}"
 
 
-def queue_current_state(on: bool, colour: Colour, outgoing: asyncio.Queue, discovery: dict) -> None:
+def queue_current_state(on: bool, colour: Colour, outgoing: asyncio.Queue[Outgoing], discovery: dict) -> None:
     payload = f"{"on" if on else "off"},{colour.state()}"
     outgoing.put_nowait(Outgoing(topic=discovery['state_topic'], payload=payload))
 
@@ -165,7 +164,7 @@ async def do_transition(light: busylight_core.Light, transition_duration: float,
     logging.debug("transition to %s done leds=%d repeat=%s", rgb, light.nleds, repeated_set)
 
 
-async def listener(client: aiomqtt.Client, light: busylight_core.Light, discovery: dict, outgoing: asyncio.Queue, colour: Colour,
+async def listener(client: aiomqtt.Client, light: busylight_core.Light, discovery: dict, outgoing: asyncio.Queue[Outgoing], colour: Colour,
         on: bool,
         repeated_set: LongSet,
         tg: asyncio.TaskGroup,
@@ -174,21 +173,24 @@ async def listener(client: aiomqtt.Client, light: busylight_core.Light, discover
     async for message in client.messages:
         logging.debug("got a message from client.messages: %s %s", message.topic, message.payload)
         if str(message.topic) == discovery['command_topic']:
-            if task:
-                task.cancel()
-                task = None
-            fields = message.payload.decode().split(",")
-            if fields[0] == "off":
-                transition = get_transition(fields, 1)
-                task = tg.create_task(do_transition(light, transition_duration=transition, rgb=(0, 0, 0), repeated_set=repeated_set))
-                on = False
-            elif fields[0] == "on":
-                on = True
-                colour.update(fields, 1)
-                transition = get_transition(fields, 5)
-                task = tg.create_task(do_transition(light, transition_duration=transition, rgb=colour.get_rgb(), repeated_set=repeated_set))
+            if not isinstance(message.payload, bytes):
+                logging.info("bad payload type from client: %s %s", message.topic, message.payload)
             else:
-                logging.info("bad message from client: %s %s", message.topic, payload)
+                fields = message.payload.decode().split(",")
+                if task:
+                    task.cancel()
+                    task = None
+                if fields[0] == "off":
+                    transition = get_transition(fields, 1)
+                    task = tg.create_task(do_transition(light, transition_duration=transition, rgb=(0, 0, 0), repeated_set=repeated_set))
+                    on = False
+                elif fields[0] == "on":
+                    on = True
+                    colour.update(fields, 1)
+                    transition = get_transition(fields, 5)
+                    task = tg.create_task(do_transition(light, transition_duration=transition, rgb=colour.get_rgb(), repeated_set=repeated_set))
+                else:
+                    logging.info("bad message from client: %s %s", message.topic, message.payload)
         else:
             logging.info("message on unexpected topic from client: %s %s", message.topic, message.payload)
 
@@ -197,7 +199,7 @@ async def listener(client: aiomqtt.Client, light: busylight_core.Light, discover
     logging.error("end of listener")
 
 
-async def publisher(client: aiomqtt.Client, outgoing: asyncio.Queue) -> None:
+async def publisher(client: aiomqtt.Client, outgoing: asyncio.Queue[Outgoing]) -> None:
     while True:
         message = await outgoing.get()
         logging.debug("sending %s (%d remaining)", message, outgoing.qsize())
@@ -223,7 +225,7 @@ def make_discovery(light: busylight_core.Light, mqtt_tag: str) -> dict:
             "manufacturer": hardware.manufacturer_string,
             "model": hardware.product_string,
             "serial_number": hardware.serial_number,
-            "sw_version": "%#0x" % hardware.release_number,
+            "sw_version": hardware.release_number,
         },
         "origin": {
             "name": identifier,
@@ -271,7 +273,7 @@ async def mqtt(light: busylight_core.Light,
     discovery = make_discovery(light, mqtt_tag)
     will = aiomqtt.Will(topic=discovery['availability_topic'], payload="offline", qos=2, retain=True) # https://github.com/empicano/aiomqtt/issues/28
     client = aiomqtt.Client(hostname=broker, username=user, password=password, identifier=clientid, will=will)
-    outgoing = asyncio.Queue()
+    outgoing: asyncio.Queue[Outgoing] = asyncio.Queue()
     first = True
     while True:
         try:
@@ -316,8 +318,7 @@ def get_light(path: str) -> busylight_core.Light:
         logging.fatal("No light found at path %s: %s", path, ex)
         sys.exit(2)
     logging.info(
-        "using light %s with %d LEDs %s%s%s%s%s", light, light.nleds,
-        light.state,
+        "using light %s with %d LEDs %s%s%s%s", light, light.nleds,
         ' flash' if hasattr(light, 'flash') else '',
         ' multi_led' if 'led' in getattr(light.on, '__annotations__', {}) else '',
         ' audio' if 'sound' in getattr(light.on, '__annotations__', {}) else '',
