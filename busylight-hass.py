@@ -52,7 +52,7 @@ def get_options():
     parser.add_argument("--green", type=int, metavar="INTEGER", default=0, help="green level")
     parser.add_argument("--blue", type=int, metavar="INTEGER", default=0, help="blue level")
     parser.add_argument("--brightness", type=int, metavar="INTEGER", default=255, help="initial and default brightness")
-    parser.add_argument('--repeat_delay', type=float, metavar='DELAY', default=0.2, help='delay between requests when repeating')
+    parser.add_argument('--repeat_delay', type=float, metavar='DELAY', default=0.1, help='delay between requests when repeating')
     parser.add_argument('--repeat_duration', type=float, metavar='DURATION', default=0.0, help='repeat requests for this duration')
     parser.add_argument("--mqttbroker", help="mqtt broker")
     parser.add_argument('--mqtt_tag', '--tag', default='busylight_hass', help='tag for mqtt broker and topics')
