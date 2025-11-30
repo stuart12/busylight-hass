@@ -299,7 +299,14 @@ def get_light(path: str) -> busylight_core.Light:
     except busylight_core.NoLightsFoundError as ex:
         logging.fatal("No light found at path %s: %s", path, ex)
         sys.exit(2)
-    logging.info("using light %s with %d LEDs", light, light.nleds)
+    logging.info(
+        "using light %s with %d LEDs %s%s%s%s%s", light, light.nleds,
+        light.state,
+        ' flash' if hasattr(light, 'flash') else '',
+        ' multi_led' if 'led' in getattr(light.on, '__annotations__', {}) else '',
+        ' audio' if 'sound' in getattr(light.on, '__annotations__', {}) else '',
+        ' fade' if hasattr(light, 'fade') else '',
+    )
     return light
     
 
