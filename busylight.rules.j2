@@ -1,5 +1,6 @@
 # {{ global.files.tag }}
 # busylight
+# echo -n 1-1.3 | sudo tee /sys/bus/usb/drivers/usb/unbind; echo
 
 ACTION=="bind|unbind", \
 ENV{PRODUCT}=="20a0/41e5/*", \
