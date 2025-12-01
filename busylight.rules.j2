@@ -5,6 +5,5 @@ ACTION=="bind|unbind", \
 ENV{PRODUCT}=="20a0/41e5/*", \
 ENV{DEVTYPE}=="usb_interface", \
 TAG+="systemd", \
-ENV{SYSTEMD_ALIAS}+="/dev/alias/busylight_hass/%k", \
 ENV{SYSTEMD_WANTS}+="busylight_hass@$name.service", \
 PROGRAM="/usr/bin/logger -p notice %E{ACTION} busylight_hass name3=$name k=%k n=%n p=%p b=%b driver=$driver N=%N"
