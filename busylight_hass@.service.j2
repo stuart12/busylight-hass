@@ -30,6 +30,7 @@ ExecStartPre = +cp --no-preserve=all {{ location }}/busylight-hass.py ${RUNTIME_
 ExecStartPre = +chmod 444 ${RUNTIME_DIRECTORY}/script
 
 Environment = "PACKAGES= \
+  mypy==1.19.0 \
   aiomqtt==2.4.0 \
   busylight_core==0.15.3 \
   "
@@ -42,7 +43,8 @@ ExecStart = sh -ce ' \
   [ -d ${CACHE_DIRECTORY}/pkg ] || { \
     ${PIP} --no-cache-dir download --dest=${CACHE_DIRECTORY}/pkg-tmp ${PACKAGES}; \
     mv ${CACHE_DIRECTORY}/pkg-tmp ${CACHE_DIRECTORY}/pkg; }; \
-  ${PIP} install --no-index --find-links=${CACHE_DIRECTORY}/pkg ${PACKAGES}; \
+  ${PIP} install --no-cache-dir --no-index --find-links=${CACHE_DIRECTORY}/pkg ${PACKAGES}; \
+  python3 -m mypy --follow-untyped-imports ${RUNTIME_DIRECTORY}/script; \
   exec python3 ${RUNTIME_DIRECTORY}/script \
     --loglevel={{ loglevel }} \
     --mqttuser={{ user }} \
